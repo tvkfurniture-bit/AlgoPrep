@@ -4,7 +4,7 @@ Version: 3.0.0 — Mobile-First UI + 4-Mode Processing Engine
 """
 
 import streamlit as st
-from PIL import Image, ImageOps, ImageDraw
+from PIL import Image, ImageOps
 import numpy as np
 import cv2
 import io
@@ -195,7 +195,7 @@ def mode_photo_dither(gray: np.ndarray, gamma: float, contrast: float) -> np.nda
     )
     sharp = np.clip(sharp, 0, 255).astype(np.uint8)
 
-    # Step 3: Contrast stretch to full range with safety check against divide-by-zero
+    # Step 3: Contrast stretch to full range
     p1 = float(np.percentile(sharp, 1))
     p99 = float(np.percentile(sharp, 99))
     if p99 > p1:
@@ -210,9 +210,7 @@ def mode_photo_dither(gray: np.ndarray, gamma: float, contrast: float) -> np.nda
 
     # Step 5: Floyd-Steinberg dither → laser convention (black=burn)
     pil = Image.fromarray(gamma_img)
-    # Compatibility safe fallback for varying Pillow environments
-    dither_method = getattr(Image, 'Dither', Image).FLOYDSTEINBERG
-    dithered = pil.convert("1", dither=dither_method).convert("L")
+    dithered = pil.convert("1", dither=Image.Dither.FLOYDSTEINBERG).convert("L")
     return np.array(ImageOps.invert(dithered))
 
 
@@ -234,6 +232,7 @@ def mode_edge_engrave(gray: np.ndarray, lo: int, hi: int, thickness: int) -> np.
 
 
 def apply_circular_mask(img: Image.Image) -> Image.Image:
+    from PIL import ImageDraw
     img = img.convert("RGBA")
     size = min(img.size)
     img = img.crop(((img.width-size)//2, (img.height-size)//2,
