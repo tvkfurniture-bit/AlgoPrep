@@ -608,9 +608,6 @@ PRESETS = {
         "mode_idx": 0, "dark_thresh": 65,
         "brightness": 1.0, "contrast": 1.0, "invert_out": False,
     },
-    "🎨 Color Illustration":
-        "📌 <b>Best for:</b> Full-color clipart, religious icons, flat illustrations, cartoons — any image with colored fills on a white background.<br>"
-        "🔧 HSV-based color/background separation. Extracts complete artwork silhouette regardless of fill color. Restores face features and ornament detail.",
 }
 MODE_NAMES = [
     "🎯 Smart Isolation",
@@ -640,6 +637,9 @@ MODE_TIPS = {
     "🎭 Stencil / Posterize":
         "📌 <b>Best for:</b> High-contrast graphic art, multi-layer burns, pop-art style engraving.<br>"
         "🔧 Reduces image to N tonal levels then binary-splits. Great for bold statement pieces.",
+    "🎨 Color Illustration":
+        "📌 <b>Best for:</b> Full-color clipart, religious icons, flat illustrations, cartoons — any image with colored fills on a white/solid background.<br>"
+        "🔧 HSV color-space extraction: captures yellow faces, blue headdresses, red accents correctly regardless of gray value. Restores face features and ornament detail.",
 }
 
 
