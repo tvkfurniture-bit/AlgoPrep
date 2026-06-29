@@ -405,6 +405,89 @@ def mode_halftone(gray, cell_size, angle_deg=45):
     out = cv2.warpAffine(out, M_inv, (w,h), borderValue=255)
     return out
 
+
+def mode_color_illustration(rgb: np.ndarray,
+                             bg_v_thresh: int = 235,
+                             bg_s_thresh: int = 20,
+                             detail_mode: str = "Detailed",
+                             face_line_thresh: int = 100) -> np.ndarray:
+    """
+    Mode 7 — Color Illustration Extractor  (NEW)
+    For: Full-color flat illustrations, clipart, vector-style artwork,
+         religious icons, cartoon characters — ANY image with a plain
+         white/solid background and multiple distinct fill colors.
+
+    Root-cause this fixes:
+      Grayscale conversion collapses color information. Yellow face (gray=168),
+      dark blue headdress (gray=44), and white background (gray=244) exist in
+      completely different hue channels — a single threshold destroys the structure.
+
+    Pipeline:
+      1. HSV background detection (high V, low S = pure white/off-white)
+      2. Flood-fill from image border → solid artwork silhouette
+      3. Morphological smoothing of silhouette edge
+      4. Selective restoration of ornament white-detail (beads, gaps)
+      5. Restoration of dark feature lines on colored face areas (eyes, lips)
+      6. Final clean + laser-convention invert
+    """
+    hsv  = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    H, S, V = hsv[:,:,0], hsv[:,:,1], hsv[:,:,2]
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    h, w = gray.shape
+
+    # Stage 1: background
+    bg   = (V > bg_v_thresh) & (S < bg_s_thresh)
+    art_raw = (~bg).astype(np.uint8) * 255
+
+    # Stage 2: flood-fill solid silhouette
+    flood = art_raw.copy()
+    for x in range(0, w, max(1, w//20)):
+        cv2.floodFill(flood, None, (x, 0),   255)
+        cv2.floodFill(flood, None, (x, h-1), 255)
+    for y in range(0, h, max(1, h//20)):
+        cv2.floodFill(flood, None, (0,   y), 255)
+        cv2.floodFill(flood, None, (w-1, y), 255)
+    art_solid = art_raw.copy()
+    art_solid[flood == 0] = 255
+
+    # Stage 3: smooth silhouette edge
+    k9 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    art_solid = cv2.morphologyEx(art_solid, cv2.MORPH_CLOSE, k9, iterations=2)
+    art_solid = cv2.morphologyEx(art_solid, cv2.MORPH_OPEN,  k3, iterations=1)
+
+    result = art_solid.copy()
+
+    if detail_mode in ("Detailed", "Face Lines Only"):
+        # Stage 4: restore ornament white detail (non-face white areas in artwork)
+        yellow = (H >= 15) & (H <= 40) & (S > 80) & (V > 120)
+        white_non_face = (art_raw == 0) & art_solid.astype(bool) & ~yellow
+        k5e = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        white_eroded = cv2.erode(white_non_face.astype(np.uint8)*255, k5e, iterations=1)
+        result[white_eroded == 255] = 0
+
+        # Stage 5: face feature lines (eyes, brows, lips, nose, bindi)
+        dark_face = yellow & (gray < face_line_thresh)
+        k5d = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        face_lines = cv2.dilate(dark_face.astype(np.uint8)*255, k5d, iterations=1)
+        result[face_lines == 255] = 255
+
+    if detail_mode == "Face Lines Only":
+        # Only silhouette + face lines, no ornament gaps (cleaner for small blanks)
+        yellow = (H >= 15) & (H <= 40) & (S > 80) & (V > 120)
+        dark_face = yellow & (gray < face_line_thresh)
+        k5d = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        face_lines = cv2.dilate(dark_face.astype(np.uint8)*255, k5d, iterations=1)
+        result = art_solid.copy()
+        result[face_lines == 255] = 255
+
+    # Stage 6: final clean
+    k5c = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    result = cv2.morphologyEx(result, cv2.MORPH_CLOSE, k5c, iterations=1)
+    result = cv2.morphologyEx(result, cv2.MORPH_OPEN,  k3,  iterations=1)
+
+    return cv2.bitwise_not(result)  # black=burn, white=skip
+
 def mode_stencil(gray, levels):
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
     enhanced = clahe.apply(gray)
@@ -518,10 +601,16 @@ PRESETS = {
         "mode_idx": 2, "gamma_val": 0.7, "sharpness_val": 1.5,
         "brightness": 1.0, "contrast": 1.2, "invert_out": False,
     },
+    "🎨 Color Artwork": {
+        "mode_idx": 6, "brightness": 1.0, "contrast": 1.0, "invert_out": False,
+    },
     "⚫ Metal Cutout": {
         "mode_idx": 0, "dark_thresh": 65,
         "brightness": 1.0, "contrast": 1.0, "invert_out": False,
     },
+    "🎨 Color Illustration":
+        "📌 <b>Best for:</b> Full-color clipart, religious icons, flat illustrations, cartoons — any image with colored fills on a white background.<br>"
+        "🔧 HSV-based color/background separation. Extracts complete artwork silhouette regardless of fill color. Restores face features and ornament detail.",
 }
 MODE_NAMES = [
     "🎯 Smart Isolation",
@@ -530,6 +619,7 @@ MODE_NAMES = [
     "✏️ Edge / Line Art",
     "⬤ Halftone",
     "🎭 Stencil / Posterize",
+    "🎨 Color Illustration",
 ]
 MODE_TIPS = {
     "🎯 Smart Isolation":
@@ -715,6 +805,29 @@ elif mode == "⬤ Halftone":
             help="Classic newspaper halftone uses 45°. 0° = square grid. 15° = subtle.")
     st.markdown('<div class="pill-info">⬡ Classic halftone dot grid. <b>AlgoOS:</b> Image → Passthrough. Recommended for dark anodized aluminium, acrylic, or slate.</div>', unsafe_allow_html=True)
 
+elif mode == "🎨 Color Illustration":
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        detail_mode = st.radio("Detail Level", 
+            options=["Solid Silhouette", "Detailed", "Face Lines Only"],
+            index=1,
+            help="Solid = clean wall-art cutout. Detailed = ornament gaps + face lines. Face Lines Only = silhouette + eyes/lips only.")
+    with c2:
+        bg_v_thresh = st.slider("Background Brightness Cutoff", 200, 255, 235, 1,
+            help="Pixels brighter than this = background. Lower if background has cream/off-white tint.")
+        bg_s_thresh = st.slider("Background Saturation Cutoff", 5, 60, 20, 1,
+            help="Pixels less saturated than this = background. Raise if BG has a slight color cast.")
+    with c3:
+        face_line_thresh = st.slider("Face Line Sensitivity", 60, 160, 100, 5,
+            help="Threshold for detecting dark features (eyes, lips, brows) on colored skin areas. Lower = only darkest lines. Higher = more detail.")
+        invert_out = st.toggle("Invert Output", False)
+    st.markdown('''<div class="pill-info">
+      🎨 <b>Color Illustration mode active</b><br>
+      This mode uses HSV color-space analysis — not grayscale. Yellow faces, blue headdresses,
+      red accents all get captured correctly regardless of their gray value.<br>
+      <b>AlgoOS:</b> Image → Passthrough · Skip Blank Lines ✓
+    </div>''', unsafe_allow_html=True)
+
 elif mode == "🎭 Stencil / Posterize":
     c1, c2 = st.columns(2)
     with c1:
@@ -840,8 +953,11 @@ with st.spinner("Processing…"):
         result = mode_edge(gray, canny_lo, canny_hi, edge_thick)
     elif mode == "⬤ Halftone":
         result = mode_halftone(gray, cell_size, ht_angle)
+
     elif mode == "🎭 Stencil / Posterize":
         result = mode_stencil(gray, stencil_levels)
+    elif mode == "🎨 Color Illustration":
+        result = mode_color_illustration(rgb, bg_v_thresh, bg_s_thresh, detail_mode, face_line_thresh)
 
     if invert_out:
         result = cv2.bitwise_not(result)
@@ -990,6 +1106,7 @@ ALGOOS_NOTES = {
     "✏️ Edge / Line Art":     "Mode: <b>Image → Passthrough</b> · Skip Blank Lines gives max speedup ✓",
     "⬤ Halftone":             "Mode: <b>Image → Passthrough</b> · Skip Blank Lines ✓",
     "🎭 Stencil / Posterize": "Mode: <b>Image → Passthrough</b> · Skip Blank Lines ✓",
+    "🎨 Color Illustration": "Mode: <b>Image → Passthrough</b> · HSV extraction baked in · Skip Blank Lines ✓",
 }
 
 with dl_col:
