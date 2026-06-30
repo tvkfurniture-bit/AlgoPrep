@@ -504,7 +504,107 @@ def mode_stencil(gray, levels):
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k)
     return binary
 
-# ── Pre-processing helpers ──────────────────────────────────────────────────
+
+def mode_document_restore(gray: np.ndarray,
+                           upscale: int = 3,
+                           block_size: int = 31,
+                           c_const: int = 12,
+                           despeckle_strength: int = 5,
+                           merge_kernel: int = 21,
+                           merge_min_area: int = 900,
+                           stroke_weight: int = 1) -> np.ndarray:
+    """
+    Mode 8 — Document / Text Restoration  (NEW)
+    For: Old book scans, photocopies, faded manuscripts, mantras/chalisa/stotra
+         text pages — any degraded document with paper-grain speckle noise and
+         broken/thin character strokes (especially Devanagari and other complex
+         scripts where global thresholding destroys fine matras and conjuncts).
+
+    Root-cause this fixes:
+      A degraded scan has THREE problems simultaneously: (1) uneven illumination
+      across the page making any single global threshold wrong somewhere, (2)
+      dense paper-grain speckle noise in similar darkness range to faded ink,
+      and (3) thin/broken character strokes that erode away under any
+      morphological denoising strong enough to remove the speckles.
+
+      Standard threshold-based denoising (small-kernel morphological open) can't
+      tell a 1-pixel speckle dot from a 1-pixel-thin character stroke — they're
+      the same size. The fix must use STRUCTURE (how components relate to their
+      neighbours), not just SIZE.
+
+    Pipeline:
+      1. Upscale 3x (cubic) — gives thin Devanagari strokes enough pixel budget
+         to survive subsequent processing without disappearing.
+      2. Median blur despeckle — removes salt noise without eroding strokes
+         (unlike morphological opening, median blur preserves edges).
+      3. Adaptive (local) Gaussian threshold — correctly handles uneven scan
+         illumination/contrast across the page, unlike a single global cutoff.
+      4. Connected-component neighbourhood analysis — dilate a COPY of the mask
+         heavily to merge components that belong to the same word/text-line,
+         then check each original component's merged-group size. Genuine text
+         is always part of a large merged group (it sits in dense text lines).
+         Isolated speckle dots remain isolated even after heavy dilation, so
+         their merged-group size stays tiny — they get discarded. This
+         correctly distinguishes noise from text using STRUCTURE, not just
+         pixel count, so even tiny correct marks (matras, bindi) survive as
+         long as they're near other text.
+      5. Stroke reinforcement — slight dilation restores letter weight lost to
+         scan fading/generation loss, matching the bold, fully-formed glyphs
+         seen in the reference engraved product.
+    """
+    # Stage 1: upscale for sub-pixel precision
+    up = cv2.resize(gray, None, fx=upscale, fy=upscale, interpolation=cv2.INTER_CUBIC)
+
+    # Stage 2: despeckle (median blur preserves stroke edges, kills salt noise)
+    if despeckle_strength % 2 == 0:
+        despeckle_strength += 1  # median blur requires odd kernel
+    despeckled = cv2.medianBlur(up, despeckle_strength)
+
+    # Stage 3: adaptive local threshold
+    if block_size % 2 == 0:
+        block_size += 1  # adaptiveThreshold requires odd blockSize
+    adaptive = cv2.adaptiveThreshold(
+        despeckled, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY, blockSize=block_size, C=c_const
+    )
+
+    # Stage 4: structural speckle removal via neighbourhood-density analysis
+    text_mask = (adaptive == 0).astype(np.uint8)
+    n, labels, stats, centroids = cv2.connectedComponentsWithStats(text_mask, connectivity=8)
+
+    k_merge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (merge_kernel, merge_kernel))
+    dilated_test = cv2.dilate(text_mask, k_merge, iterations=1)
+    n2, labels2, stats2, _ = cv2.connectedComponentsWithStats(dilated_test, connectivity=8)
+    merged_sizes = stats2[:, cv2.CC_STAT_AREA]
+
+    cleaned = np.zeros_like(text_mask)
+    h_img, w_img = text_mask.shape
+    for i in range(1, n):
+        cy, cx = int(centroids[i][1]), int(centroids[i][0])
+        cy = min(max(cy, 0), h_img - 1)
+        cx = min(max(cx, 0), w_img - 1)
+        merged_label = labels2[cy, cx]
+        if merged_sizes[merged_label] >= merge_min_area:
+            ys, xs = stats[i, cv2.CC_STAT_TOP], stats[i, cv2.CC_STAT_LEFT]
+            wc, hc = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+            region = labels[ys:ys+hc, xs:xs+wc] == i
+            cleaned[ys:ys+hc, xs:xs+wc][region] = 1
+
+    cleaned_img = np.where(cleaned == 1, 0, 255).astype(np.uint8)
+
+    # Stage 5: stroke reinforcement (restore weight lost to fading)
+    if stroke_weight > 0:
+        k_s = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (stroke_weight*2+1, stroke_weight*2+1))
+        text_only = (cleaned_img == 0).astype(np.uint8) * 255
+        strengthened = cv2.dilate(text_only, k_s, iterations=1)
+        result = cv2.bitwise_not(strengthened)
+    else:
+        result = cleaned_img
+
+    return result  # black=burn (text), white=skip (paper)
+
+
+
 
 def auto_remove_bg(img_pil, tolerance=20):
     gray = np.array(img_pil.convert("L"))
@@ -608,6 +708,9 @@ PRESETS = {
         "mode_idx": 0, "dark_thresh": 65,
         "brightness": 1.0, "contrast": 1.0, "invert_out": False,
     },
+    "📜 Old Document / Mantra": {
+        "mode_idx": 7, "brightness": 1.0, "contrast": 1.0, "invert_out": False,
+    },
 }
 MODE_NAMES = [
     "🎯 Smart Isolation",
@@ -617,6 +720,7 @@ MODE_NAMES = [
     "⬤ Halftone",
     "🎭 Stencil / Posterize",
     "🎨 Color Illustration",
+    "📜 Document Restore",
 ]
 MODE_TIPS = {
     "🎯 Smart Isolation":
@@ -640,6 +744,9 @@ MODE_TIPS = {
     "🎨 Color Illustration":
         "📌 <b>Best for:</b> Full-color clipart, religious icons, flat illustrations, cartoons — any image with colored fills on a white/solid background.<br>"
         "🔧 HSV color-space extraction: captures yellow faces, blue headdresses, red accents correctly regardless of gray value. Restores face features and ornament detail.",
+    "📜 Document Restore":
+        "📌 <b>Best for:</b> Old book scans, photocopies, faded mantra/chalisa/stotra pages, manuscripts with paper-grain speckle noise and thin/broken Devanagari or other script strokes.<br>"
+        "🔧 Adaptive local thresholding + structural speckle removal (distinguishes noise from text by neighbourhood density, not just size) + stroke reinforcement to restore faded letter weight.",
 }
 
 
@@ -828,7 +935,33 @@ elif mode == "🎨 Color Illustration":
       <b>AlgoOS:</b> Image → Passthrough · Skip Blank Lines ✓
     </div>''', unsafe_allow_html=True)
 
-elif mode == "🎭 Stencil / Posterize":
+elif mode == "📜 Document Restore":
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        doc_upscale = st.select_slider("Upscale Factor", options=[2, 3, 4], value=3,
+            help="Higher = sharper thin strokes survive processing, but slower. 3x recommended for old scans.")
+        doc_stroke_weight = st.slider("Stroke Reinforcement", 0, 3, 1, 1,
+            help="Restores letter weight lost to scan fading. 0 = none. 1 = subtle (recommended). 2-3 = bold/thick.")
+    with c2:
+        doc_block_size = st.slider("Adaptive Block Size", 11, 61, 31, 2,
+            help="Local threshold neighbourhood size. Larger = smoother but less local adaptation. Must stay odd — auto-corrected.")
+        doc_c_const = st.slider("Threshold Sensitivity (C)", 2, 25, 12, 1,
+            help="Higher = stricter (less captured as text). Lower = more lenient (may re-admit speckle).")
+    with c3:
+        doc_despeckle = st.slider("Despeckle Strength", 3, 9, 5, 2,
+            help="Median blur kernel before thresholding. Higher = more aggressive noise removal. Must stay odd.")
+        doc_merge_area = st.slider("Speckle Sensitivity", 300, 2000, 900, 100,
+            help="Minimum neighbourhood size for a mark to count as 'real text'. Higher = more aggressive speckle removal, but risks removing isolated small marks (bindi, single matras).")
+        invert_out = st.toggle("Invert Output", False)
+    st.markdown('''<div class="pill-info">
+      📜 <b>Document Restore mode active</b><br>
+      Uses structural neighbourhood analysis to separate paper-grain speckle noise from genuine
+      character strokes — even thin, faded Devanagari conjuncts survive while isolated dust specks
+      are removed. Adaptive thresholding handles uneven scan illumination automatically.<br>
+      <b>AlgoOS:</b> Image → Passthrough · Skip Blank Lines ✓ (works exceptionally well on text)
+    </div>''', unsafe_allow_html=True)
+
+
     c1, c2 = st.columns(2)
     with c1:
         stencil_levels = st.select_slider("Tonal Levels", options=[2,3,4,5,6,8], value=4,
@@ -958,6 +1091,9 @@ with st.spinner("Processing…"):
         result = mode_stencil(gray, stencil_levels)
     elif mode == "🎨 Color Illustration":
         result = mode_color_illustration(rgb, bg_v_thresh, bg_s_thresh, detail_mode, face_line_thresh)
+    elif mode == "📜 Document Restore":
+        result = mode_document_restore(gray, doc_upscale, doc_block_size, doc_c_const,
+                                        doc_despeckle, 21, doc_merge_area, doc_stroke_weight)
 
     if invert_out:
         result = cv2.bitwise_not(result)
@@ -1107,6 +1243,7 @@ ALGOOS_NOTES = {
     "⬤ Halftone":             "Mode: <b>Image → Passthrough</b> · Skip Blank Lines ✓",
     "🎭 Stencil / Posterize": "Mode: <b>Image → Passthrough</b> · Skip Blank Lines ✓",
     "🎨 Color Illustration": "Mode: <b>Image → Passthrough</b> · HSV extraction baked in · Skip Blank Lines ✓",
+    "📜 Document Restore": "Mode: <b>Image → Passthrough</b> · Structural denoise baked in · Skip Blank Lines ✓ (excellent ratio on text)",
 }
 
 with dl_col:
