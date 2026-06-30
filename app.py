@@ -860,7 +860,7 @@ if mode == "🎯 Smart Isolation":
             help="Only pixels DARKER than this = artwork. Raise if strokes missing. Lower if background bleeds.")
     with c2:
         invert_out = st.toggle("Invert Output", bool(preset_data.get("invert_out",False)),
-            help="ON = dark wood (burn background). OFF = light wood (burn artwork).")
+            help="ON = dark wood (burn background). OFF = light wood (burn artwork).", key="invert_smart")
     st.markdown(f'<div class="pill-info">Targeting pixels darker than <b>{dark_thresh}</b> as artwork. Background above discarded.</div>', unsafe_allow_html=True)
 
 elif mode == "⚡ Standard Threshold":
@@ -876,7 +876,7 @@ elif mode == "⚡ Standard Threshold":
     with c3:
         use_clahe = st.toggle("CLAHE Boost", bool(preset_data.get("use_clahe",False)),
             help="Adaptive histogram equalisation for low-contrast images.")
-        invert_out = st.toggle("Invert Output", False)
+        invert_out = st.toggle("Invert Output", False, key="invert_std")
 
 elif mode == "📷 Photo / Dither":
     c1, c2 = st.columns(2)
@@ -884,7 +884,7 @@ elif mode == "📷 Photo / Dither":
         gamma_val = st.slider("Gamma (Midtone Depth)", 0.4, 1.4,
             float(preset_data.get("gamma_val",0.8)), 0.05,
             help="Lower = darker midtones = deeper perceived engraving. 0.7–0.9 optimal.")
-        invert_out = st.toggle("Invert Output", False)
+        invert_out = st.toggle("Invert Output", False, key="invert_photo")
     with c2:
         sharpness_val = st.slider("Sharpness / Detail", 0.5, 3.0,
             float(preset_data.get("sharpness_val",1.2)), 0.1,
@@ -899,14 +899,14 @@ elif mode == "✏️ Edge / Line Art":
         canny_hi = st.slider("Edge Threshold (High)", 50, 300, 150, 5)
     with c3:
         edge_thick = st.select_slider("Line Thickness", options=[1,2,3,4], value=2)
-        invert_out = st.toggle("Invert Output", False)
+        invert_out = st.toggle("Invert Output", False, key="invert_edge")
 
 elif mode == "⬤ Halftone":
     c1, c2 = st.columns(2)
     with c1:
         cell_size = st.slider("Dot Cell Size (px)", 4, 24, 10, 1,
             help="Smaller = finer dots = more detail. Larger = bolder look. 8–12 optimal for 300 DPI.")
-        invert_out = st.toggle("Invert Output", False)
+        invert_out = st.toggle("Invert Output", False, key="invert_halftone")
     with c2:
         ht_angle = st.slider("Halftone Angle (°)", 0, 90, 45, 5,
             help="Classic newspaper halftone uses 45°. 0° = square grid. 15° = subtle.")
@@ -927,7 +927,7 @@ elif mode == "🎨 Color Illustration":
     with c3:
         face_line_thresh = st.slider("Face Line Sensitivity", 60, 160, 100, 5,
             help="Threshold for detecting dark features (eyes, lips, brows) on colored skin areas. Lower = only darkest lines. Higher = more detail.")
-        invert_out = st.toggle("Invert Output", False)
+        invert_out = st.toggle("Invert Output", False, key="invert_color")
     st.markdown('''<div class="pill-info">
       🎨 <b>Color Illustration mode active</b><br>
       This mode uses HSV color-space analysis — not grayscale. Yellow faces, blue headdresses,
@@ -952,7 +952,7 @@ elif mode == "📜 Document Restore":
             help="Median blur kernel before thresholding. Higher = more aggressive noise removal. Must stay odd.")
         doc_merge_area = st.slider("Speckle Sensitivity", 300, 2000, 900, 100,
             help="Minimum neighbourhood size for a mark to count as 'real text'. Higher = more aggressive speckle removal, but risks removing isolated small marks (bindi, single matras).")
-        invert_out = st.toggle("Invert Output", False)
+        invert_out = st.toggle("Invert Output", False, key="invert_stencil")
     st.markdown('''<div class="pill-info">
       📜 <b>Document Restore mode active</b><br>
       Uses structural neighbourhood analysis to separate paper-grain speckle noise from genuine
@@ -966,7 +966,7 @@ elif mode == "📜 Document Restore":
     with c1:
         stencil_levels = st.select_slider("Tonal Levels", options=[2,3,4,5,6,8], value=4,
             help="2 = pure binary. 4 = balanced stencil. 6+ = more tonal nuance.")
-        invert_out = st.toggle("Invert Output", False)
+        invert_out = st.toggle("Invert Output", False, key="invert_docrestore")
     with c2:
         st.markdown(f"""<div class="pill-info" style="margin-top:22px;">
           ⬡ <b>Level guide:</b><br>
